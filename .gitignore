@@ -1,0 +1,75 @@
+# Node.js dependencies
+node_modules/
+backend/node_modules/
+backend/npm-debug.log*
+backend/yarn-debug.log*
+backend/yarn-error.log*
+# Note: package-lock.json SHOULD be committed to ensure consistent dependency versions
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+backend/.env
+backend/.env.local
+backend/.env.*.local
+
+# Logs
+logs
+*.log
+logs/*.log
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Build output
+dist/
+build/
+tmp/
+temp/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# VS Code settings
+backend/.vscode/
+backend/.history/
+
+# Database dumps (if you export SQL locally)
+*.sql
+*.sqlite
+*.db
+
+# Coverage / testing
+coverage/
+.nyc_output/
+
+#frontend
+
+# Logs
+frontend/logs
+frontend/*.log
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-debug.log*
+frontend/lerna-debug.log*
+
+frontend/node_modules
+frontend/dist
+frontend/dist-ssr
+frontend/*.local
+frontend/*.env
+
+# Editor directories and files
+frontend/.vscode/*
+frontend/!.vscode/extensions.json
+frontend/.idea
+frontend/.DS_Store
+frontend/*.suo
+frontend/*.ntvs*
+frontend/*.njsproj
+frontend/*.sln
+frontend/*.sw?

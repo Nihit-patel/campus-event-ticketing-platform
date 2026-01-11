@@ -1,0 +1,313 @@
+import { BuildingOfficeIcon, CalendarDateRangeIcon, ChevronLeftIcon, ChevronRightIcon, MapPinIcon, QrCodeIcon, TicketIcon, UsersIcon } from '@heroicons/react/24/outline';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useLanguage } from '../../hooks/useLanguage';
+import Modal from '../../components/modal/Modal';
+import { getEventsByUser } from '../../api/eventApi';
+import { decodeToken } from '../../utils/jwt';
+import LoadingPage from '../../layouts/LoadingPage';
+import { useNotification } from '../../hooks/useNotification';
+
+const EventDetailModal = ({ event, isOpen, onClose }) => {
+    const { translate, currentLanguage } = useLanguage();
+    const [isLoadingQRGeneration, setIsLoadingQRGeneration] = useState(false);
+    const { showNotification } = useNotification();
+
+    if (!event)
+        return <></>;
+
+    const eventDate = new Date(event.date || event.start_at);
+    const formattedDate = eventDate.toLocaleDateString(currentLanguage, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const formattedTime = eventDate.toLocaleTimeString(currentLanguage, { hour: '2-digit', minute: '2-digit', hour12: true });
+
+    const handleDownloadQRCode = async () => {
+        const ticketNumber = event.ticketNumber;
+
+        if (!ticketNumber)
+            return;
+
+        // Construct the API URL. We request a 400x400 pixel image.
+        const apiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(ticketNumber)}`;
+
+        try {
+            setIsLoadingQRGeneration(true);
+
+            // Fetch the image data from the API URL
+            const response = await fetch(apiUrl);
+
+            if (!response.ok) {
+                throw new Error('Failed to fetch QR code image.');
+            }
+
+            // Convert the response to a Blob (binary data)
+            const blob = await response.blob();
+
+            // Create a temporary URL for the Blob
+            const objectUrl = URL.createObjectURL(blob);
+
+            // Create a temporary link element to trigger the download
+            const link = document.createElement('a');
+            link.href = objectUrl;
+            link.download = `${event.title.replace(/\s+/g, '_')}-${ticketNumber}.png`; // Set the desired filename
+
+            // Append the link to the body, click it, and then remove it
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            // Clean up the temporary object URL
+            URL.revokeObjectURL(objectUrl);
+
+        } catch (error) {
+            console.error('Error downloading QR code:', error);
+            showNotification("Download failed", "error");
+        } finally {
+            setIsLoadingQRGeneration(false);
+        }
+    };
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} width="medium">
+            <>
+                <img
+                    src={event.imageUrl}
+                    alt={event.title}
+                    className="w-full h-64 object-cover rounded-t-xl"
+                    onError={(e) => {
+                        e.target.src = '/uploads/events/default-event-image.svg';
+                    }}
+                />
+                <div className="p-8">
+                    <span className="inline-block bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-300 text-sm font-semibold px-3 py-1 rounded-full mb-4 capitalize">{translate(event.category.toLowerCase())}</span>
+                    <h2 className="text-4xl font-bold text-gray-900 dark:text-white mb-4">{event.title}</h2>
+                    <div className="space-y-3 text-gray-600 dark:text-gray-400 mb-6">
+                        <div className="flex items-center gap-3">
+                            <CalendarDateRangeIcon className="w-5 h-5 flex-shrink-0" />
+                            <span className="capitalize">{formattedDate} at {formattedTime}</span>
+                        </div>
+                        {event.location && (
+                            <div className="flex items-center gap-3">
+                                <MapPinIcon className="w-5 h-5 flex-shrink-0" />
+                                <span>{event.location}</span>
+                            </div>
+                        )}
+                        {event.organization && (
+                            <div className="flex items-center gap-3">
+                                <BuildingOfficeIcon className="w-5 h-5 flex-shrink-0" />
+                                <span>{event.organization}</span>
+                            </div>
+                        )}
+                        <div className="flex items-center gap-3">
+                            <TicketIcon className="w-5 h-5 flex-shrink-0" />
+                            <span>{typeof event.price === 'number' ? `$${event.price.toFixed(2)} CAD` : translate(event.price.toLowerCase())}</span>
+                        </div>
+                        {event.capacity && (
+                            <div className="flex items-center gap-3">
+                                <UsersIcon className="w-5 h-5 flex-shrink-0" />
+                                <span>{translate("capacity")}: {event.registeredUsers || 0} / {event.capacity}</span>
+                            </div>
+                        )}
+                    </div>
+                    <p className="text-gray-700 dark:text-gray-300 leading-relaxed mb-8">{event.description}</p>
+                    {event.status === "confirmed" && event.ticketNumber && (
+                        <button
+                            onClick={handleDownloadQRCode}
+                            disabled={isLoadingQRGeneration}
+                            className="w-full bg-green-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-green-700 dark:hover:bg-green-500 transition-colors duration-300 text-lg flex items-center justify-center gap-2 cursor-pointer"
+                        >
+                            <QrCodeIcon className="w-6 h-6" />
+                            {translate("downloadQRCode")}
+                            {isLoadingQRGeneration && (
+                                <span className="animate-spin ml-2 h-5 w-5 border-b-2 rounded-full" />
+                            )}
+                        </button>
+                    )}
+                </div>
+            </>
+        </Modal>
+    );
+};
+
+const CalendarPage = () => {
+    const now = new Date();
+    const firstDayOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const [currentDate, setCurrentDate] = useState(new Date(firstDayOfCurrentMonth));
+    const [selectedEvent, setSelectedEvent] = useState(null);
+    const [eventsData, setEventsData] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const { translate, currentLanguage } = useLanguage();
+
+    const openEventModal = (event) => setSelectedEvent(event);
+    const closeEventModal = () => setSelectedEvent(null);
+
+    const fetchMyEvents = useCallback(() => {
+        const user = decodeToken();
+        const userId = user.userId;
+
+        setIsLoading(true);
+        getEventsByUser(userId)
+            .then(response => {
+                let data = response.events.map(x => ({
+                    id: x.event._id,
+                    title: x.event.title,
+                    category: x.event.category,
+                    date: x.event.start_at,
+                    location: x.event.location.name,
+                    organization: x.event.organization.name,
+                    description: x.event.description,
+                    imageUrl: x.event.image,
+                    price: x.event.price || "Free",
+                    status: x.status,
+                    ticketNumber: x.ticketNumbers?.length > 0 ? x.ticketNumbers[0] : null,
+                }));
+
+                setEventsData(data);
+            })
+            .catch(err => {
+                if (err.response.status !== 404) {
+                    setError(err.message || 'Failed to load events');
+                }
+
+                setEventsData([]);
+            })
+            .finally(() => setIsLoading(false));
+    }, []);
+
+    useEffect(() => {
+        fetchMyEvents();
+    }, [fetchMyEvents])
+
+    const daysOfWeek = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+        .map(day => translate(day))
+        .map(day => day.slice(0, 3));
+
+    const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+    const lastDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+    const daysInMonth = lastDayOfMonth.getDate();
+    const startingDay = firstDayOfMonth.getDay();
+
+    const calendarDays = useMemo(() => {
+        const days = [];
+        const prevLastDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 0).getDate();
+        for (let i = startingDay; i > 0; i--) {
+            days.push({ key: `prev-${i}`, date: new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, prevLastDay - i + 1), isPadding: true });
+        }
+        for (let i = 1; i <= daysInMonth; i++) {
+            days.push({ key: `current-${i}`, date: new Date(currentDate.getFullYear(), currentDate.getMonth(), i), isPadding: false });
+        }
+        const nextDays = 42 - days.length;
+        for (let i = 1; i <= nextDays; i++) {
+            days.push({ key: `next-${i}`, date: new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, i), isPadding: true });
+        }
+        return days;
+    }, [currentDate, daysInMonth, startingDay]);
+
+    const eventsByDate = useMemo(() => {
+        return eventsData.reduce((acc, event) => {
+            const eventDate = event.date || event.start_at;
+            if (!eventDate) return acc;
+
+            const dateKey = new Date(eventDate).toDateString();
+            if (!acc[dateKey]) {
+                acc[dateKey] = [];
+            }
+            acc[dateKey].push(event);
+            return acc;
+        }, {});
+    }, [eventsData]);
+
+    const handlePrevMonth = () => {
+        setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
+    };
+
+    const handleNextMonth = () => {
+        setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
+    };
+
+    const today = new Date();
+
+    if (isLoading) {
+        return (
+            <LoadingPage text="Loading Calendar..." />
+        );
+    }
+
+    if (error) {
+        return (
+            <div className="flex-grow flex items-center justify-center bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
+                <p className="text-red-600 dark:text-red-400">Error: {error}</p>
+            </div>
+        );
+    }
+
+    return (
+        <>
+            <div className="flex-grow flex flex-col bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg transition-colors duration-300 h-[calc(100vh-185px)]">
+                <div className="flex items-center justify-between mb-6 flex-shrink-0">
+                    <h1 className="text-xl font-bold text-indigo-600 tracking-tight transition-colors duration-300 capitalize">
+                        {translate("eventCalendar")}
+                    </h1>
+                    <h2 className="text-xl font-bold text-gray-900 dark:text-white transition-colors duration-300 capitalize">
+                        {currentDate.toLocaleString(currentLanguage, { month: 'long', year: 'numeric' })}
+                    </h2>
+                    <div className="flex items-center gap-2">
+                        <button onClick={handlePrevMonth} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-300 cursor-pointer">
+                            <ChevronLeftIcon className="w-6 h-6 text-gray-600 dark:text-gray-300" />
+                        </button>
+                        <button onClick={handleNextMonth} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-300 cursor-pointer">
+                            <ChevronRightIcon className="w-6 h-6 text-gray-600 dark:text-gray-300" />
+                        </button>
+                    </div>
+                </div>
+                <div className="grid grid-cols-7 gap-px flex-shrink-0">
+                    {daysOfWeek.map(day => (
+                        <div key={day} className="text-center text-xs font-semibold text-gray-500 dark:text-gray-400 py-2 uppercase transition-colors duration-300">
+                            {day}
+                        </div>
+                    ))}
+                </div>
+                <div className="flex-grow grid grid-rows-6 grid-cols-7 gap-px bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 transition-colors duration-300">
+                    {calendarDays.map((day) => {
+                        const isToday = day.date && day.date.toDateString() === today.toDateString();
+                        const dayEvents = day.date ? eventsByDate[day.date.toDateString()] || [] : [];
+
+                        return (
+                            <div
+                                key={day.key}
+                                className={`bg-white dark:bg-gray-800 p-2 flex flex-col overflow-hidden transition-colors duration-300 ${day.isPadding ? 'opacity-50' : ''}`}
+                            >
+                                <span className={`font-semibold mb-1 ${isToday ? 'bg-indigo-600 text-white rounded-full h-6 w-6 flex items-center justify-center' : 'text-gray-800 dark:text-gray-200'}`}>
+                                    {day.date ? day.date.getDate() : ''}
+                                </span>
+                                <div className="flex-grow overflow-y-auto space-y-1 scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent transition-colors duration-300">
+                                    {dayEvents.slice(0, 2).map(event => (
+                                        <button
+                                            key={event.id}
+                                            onClick={() => openEventModal(event)}
+                                            className="w-full text-left text-xs bg-indigo-100 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-300 p-1 rounded hover:bg-indigo-200 dark:hover:bg-indigo-800 truncate transition-colors duration-300 cursor-pointer"
+                                        >
+                                            {event.title}
+                                        </button>
+                                    ))}
+                                    {dayEvents.length > 2 && (
+                                        <button className="w-full text-left text-xs text-gray-500 dark:text-gray-400 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-300 cursor-pointer">
+                                            {translate("plusMore", { count: dayEvents.length - 2 })}
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+
+            <EventDetailModal
+                isOpen={!!selectedEvent}
+                onClose={closeEventModal}
+                event={selectedEvent}
+            />
+        </>
+    );
+}
+
+export default CalendarPage;
